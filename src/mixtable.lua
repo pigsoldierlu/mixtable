@@ -3,11 +3,21 @@ is_mixtable_enable = true
 
 
 function generate_secret_key()
-	-- body
-	math.randomseed(os.time())
-	math.random()
-	local r = math.random(30)
-	return 2 ^ 16 +  2 ^ r - 1
+	-- 生成密钥
+end
+
+if is_mixtable_enable then
+	g_mixtable_secret_key = generate_secret_key()
+end
+
+-- 把解密和加密函数前置 因为后面的table sort的patch里会用到
+local function encrypt(value)
+	-- 对数值进行加密
+end
+
+
+local function decrypt(value)
+	-- 对数值进行解密
 end
 
 if is_mixtable_enable then
@@ -30,29 +40,56 @@ if is_mixtable_enable then
 		end
 	function ipairs(t) return _ipairs, t, 0 end
 
-	g_mixtable_secret_key = generate_secret_key()
-end
+    rawinsert = table.insert;
+    function table.insert (table, pos, value)
+        if table.__proxy then
+            table[#table.__proxy+1] = value and value or pos
+        else
+        	local _ = value and ( rawinsert(table, pos, value) or true) or rawinsert(table, pos)
+        end
+    end
+
+	rawremove = table.remove
+	function table.remove(tbl, pos)
+		local _ = tbl.__proxy and ( rawremove(tbl.__proxy, pos) or true) or rawremove(tbl, pos)
+	end
+
+	rawsort = table.sort
+	function table.sort(tbl, cmpfunc)
+		if tbl.__proxy then 
+			local _cmpfunc = function (pre, nxt)
+				local _pre = pre
+				local _nxt = nxt
+				if type(pre) == "number" then
+					_pre = decrypt(pre)
+				end
+
+				if type(nxt) == "number" then
+					_nxt = decrypt(nxt)
+				end
+
+				if cmpfunc then
+					return cmpfunc(_pre, _nxt)
+				else
+					return _pre < _nxt
+				end
+			end
+
+			rawsort(tbl.__proxy, _cmpfunc)
+		else
+			local _ = cmpfunc and ( rawsort(tbl, cmpfunc) or true) or rawsort(tbl)
+		end
+	end
 
 
-
-
-
-local function encrypt(value)
-	return bit.bxor(value, g_mixtable_secret_key)
-end
-
-
-local function decrypt(value)
-	return bit.bxor(value, g_mixtable_secret_key)
+	
 end
 
 
 
 --[[
- 
+	创建一个加密表
 
-
- 
 ]]-- 
 function create_mix_table()
 
@@ -67,9 +104,7 @@ function create_mix_table()
 			local _val = rawget(t.__proxy, k)
 			if _val ~= nil then
 				if type(_val) == "number" then
-					return decrypt(_val) --解密但是不支持非整数
-				-- elseif type(_val) == "table" then
-				-- 	return _val
+					return decrypt(_val) 
 					
 				end
 			end
@@ -86,13 +121,17 @@ function create_mix_table()
 						rawset(t.__proxy, k, _val)
 					end
 				elseif type(v) == "table" then
-					local _ntbl = create_mix_table()
-					for _k, _v in pairs(v) do
-						_ntbl[_k] = _v
-					end
+					if v.__proxy == nil then --非加密表才需要转换创建一个新表 加密表的赋值还是保持有索引
+						local _ntbl = create_mix_table()
+						for _k, _v in pairs(v) do
+							_ntbl[_k] = _v
+						end
 
-					rawset(t.__proxy, k, _ntbl)
-				else --其他的情况
+						rawset(t.__proxy, k, _ntbl)
+					else 
+						rawset(t.__proxy, k, v)
+					end
+				else
 					rawset(t.__proxy, k, v)
 				end
 			end      			
@@ -115,32 +154,6 @@ end
 
 
 --[[
-	把amf3生成lua结构表里的冗余信息剔除 还原成真正的lua的table嵌套结构
-]]
-function trim_amf3_table(tbl)
-	if tbl == nil then return end
-
-	for k,v in pairs(tbl) do
-		if k == "_class" then
-			tbl[k] = nil
-		end
-
-		if type(v) == "table" then 
-			if k ~= "_data" then
-				trim_amf3_table(v)
-			else
-				trim_amf3_table(v)
-				if #v > 0 then
-					table.insert(tbl, v)
-				end
-				tbl[k] = nil
-			end
-		end
-	end
-end
-
-
---[[
 把lua的table 深拷贝为mixtable
 ]]
 function deepcopy_to_mix(secret_key, value)
@@ -158,19 +171,21 @@ function deepcopy_to_mix(secret_key, value)
 end
 
 --[[ 
-把加密的mixtable 深拷贝为lua的原始table
+深拷贝
 ]]
-function deepcopy_to_lua(mvalue)
+function deepcopy(value)
 	local copy
-	if type(mvalue) == "table" then
+	if type(value) == "table" then
 		copy = {}
-		for k,v in next, mvalue, nil do
-			copy[k] = deepcopy_to_lua(v)
+		for k,v in next, value, nil do
+			copy[k] = deepcopy(v)
 		end
 
 	else
-		copy = mvalue
+		copy = value
 	end
 	
 	return copy 			
 end
+
+
